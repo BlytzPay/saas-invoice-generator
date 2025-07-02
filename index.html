@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CSV Invoice Generator</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+
+        .invoice {
+            border: 1px solid #ccc;
+            padding: 3rem;
+            margin-top: 20px;
+            width: 8.5in;
+            height: 11in;
+            background: #fff;
+        }
+
+        .billing-period {
+            text-align: right;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+
+        .customer, .invoice-num, .invoice-date, .due-date, .total-due {
+            text-align: right;
+        }
+
+        th,
+        td {
+            border: 1px solid #ccc;
+            padding: 8px;
+            text-align: left;
+        }
+
+        #invoiceSelector {
+            margin-top: 20px;
+        }
+
+        .contact-email {
+            text-align: right;
+        }
+
+        #downloadBtn,
+        #downloadAllBtn {
+            margin-top: 10px;
+            display: none;
+            margin-left: 10px;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>CSV SaaS Invoice Generator</h1>
+    <input type="file" id="csvFile" accept=".csv" />
+    <button onclick="generateInvoices()">Generate Invoices</button>
+    <div id="invoiceTotal"></div>
+    <div id="invoiceSelector" class="hidden">
+        <label for="customerSelect">Select Customer:</label>
+        <select id="customerSelect" onchange="showInvoice(this.value)"></select>
+        <button id="downloadBtn" onclick="downloadPDF()">Download PDF</button>
+        <button id="downloadAllBtn" onclick="downloadAllPDFs()">Download All PDFs</button>
+    </div>
+    <div id="invoicePreview"></div>
+
+    <script>
+        let parsedData = [];
+        let customerInvoices = {};
+        let currentCustomer = '';
+        let customerDataMap = {};
+
+        document.getElementById('csvFile').addEventListener('change', function (e) {
+            const file = e.target.files[0];
+            if (file) {
+                Papa.parse(file, {
+                    header: true,
+                    skipEmptyLines: true,
+                    complete: function (results) {
+                        parsedData = results.data;
+                        alert('CSV parsed successfully! Click "Generate Invoices".');
+                    }
+                });
+            }
+        });
+
+        function groupByCustomer(data) {
+            const groups = {};
+            data.forEach(row => {
+                const name = row['*Customer'];
+                if (!groups[name]) groups[name] = [];
+                groups[name].push(row);
+            });
+            return groups;
+        }
+
+        function generateInvoices() {
+            let grandTotal = 0;
+            const customers = groupByCustomer(parsedData);
+            const select = document.getElementById('customerSelect');
+            select.innerHTML = '';
+            customerInvoices = {};
+            customerDataMap = {};
+
+            Object.entries(customers).forEach(([customer, rows]) => {
+                let total = 0;
+                let blytzId = rows[0]['BP_ID'];
+                let invoiceNo = rows[0]['*InvoiceNo'];
+                let invoiceDate = rows[0]['*InvoiceDate'];
+                let [yyyy, mm] = invoiceDate.split("-");
+                let billingStartDate = rows[0]['BillingStartDate'];
+                let billingEndDate = rows[0]['BillingEndDate'];                
+                let billingPeriod = billingStartDate+"-"+billingEndDate;
+
+
+                let contactEmail = rows[0]['Email'] || 'contact@example.com'; // fallback if empty
+
+
+                let invoiceContent = document.createElement('div');
+                invoiceContent.classList.add('invoice');
+                let headerHTML = `
+            <img class="logo" src="assets/img/blytzpay_icon.svg" alt="Logo" style="height: 60px;">
+            <h2 class="customer">${customer}</h2>
+            <p class="contact-email">${contactEmail}</p>
+            <p class="invoice-num">Invoice #: ${invoiceNo}</p>
+            <p class="billing-period">Billing Period: ${billingPeriod}</p>
+            <p class="invoice-date">Invoice Date: ${invoiceDate}</p>
+            <p class="due-date">Due Date: ${rows[0]['*DueDate']}</p>
+            <br/>
+            <br/>
+            <table>
+                <thead><tr><th>Item</th><th>Qty</th><th>Unit Price</th><th>Total</th></tr></thead>
+                <tbody>
+        `;
+
+                let rowsHTML = '';
+                rows.forEach(row => {
+                    const qty = parseFloat((row['Qty'] || '0').replace(/,/g, ''));
+                    const price = parseFloat((row['Rate'] || '0').replace(/,/g, ''));
+                    const itemTotal = qty * price;
+                    total += itemTotal;
+                    grandTotal += itemTotal;
+                    rowsHTML += `<tr><td>${row['Description']}</td><td>${qty}</td><td>$${price.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td><td>$${itemTotal.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td></tr>`;
+                });
+
+                let footerHTML = `</tbody></table><h3 class="total-due">Total Due: $${total.toLocaleString('en-US', { minimumFractionDigits: 2 })}</h3>`;
+                invoiceContent.innerHTML = headerHTML + rowsHTML + footerHTML;
+
+                customerInvoices[customer] = invoiceContent.cloneNode(true);
+                customerDataMap[customer] = {
+                    invoiceNo,
+                    yyyy,
+                    mm,
+                    total,
+                    blytzId
+                };
+
+                const option = document.createElement('option');
+                option.value = customer;
+                option.textContent = customer;
+                select.appendChild(option);
+            });
+
+            document.getElementById('invoiceSelector').classList.remove('hidden');
+            document.getElementById('downloadBtn').style.display = 'inline-block';
+            document.getElementById('downloadAllBtn').style.display = 'inline-block';
+            document.getElementById('invoiceTotal').innerHTML = `<h3>Grand Total for All Invoices: $${grandTotal.toLocaleString('en-US', { minimumFractionDigits: 2 })}</h3><p>Total Invoices: ${Object.keys(customers).length}</p>`;
+            showInvoice(select.value);
+        }
+
+        function showInvoice(customer) {
+            currentCustomer = customer;
+            const preview = document.getElementById('invoicePreview');
+            preview.innerHTML = '';
+            preview.appendChild(customerInvoices[customer].cloneNode(true));
+        }
+
+        async function downloadPDF(customer = currentCustomer) {
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF('p', 'pt', 'letter');
+            const preview = document.getElementById('invoicePreview');
+            preview.innerHTML = '';
+            preview.appendChild(customerInvoices[customer].cloneNode(true));
+
+            await new Promise(resolve => setTimeout(resolve, 500));
+
+            return html2canvas(preview.firstChild).then(canvas => {
+                // const imgData = canvas.toDataURL('image/png');
+                
+                const imgData = canvas.toDataURL('image/jpeg', 0.6);  // 0.6 = 60% quality
+
+                const imgProps = doc.getImageProperties(imgData);
+                const pdfWidth = doc.internal.pageSize.getWidth();
+                const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
+                const { yyyy, mm, invoiceNo, total, blytzId } = customerDataMap[customer];
+                const filename = `${customer}_0625SaaS-IVR_${blytzId}.pdf`;
+                doc.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+                doc.save(filename);
+            });
+        }
+
+        async function downloadAllPDFs() {
+            const preview = document.getElementById('invoicePreview');
+            for (const customer of Object.keys(customerInvoices)) {
+                preview.innerHTML = '';
+                preview.appendChild(customerInvoices[customer].cloneNode(true));
+                await new Promise(resolve => setTimeout(resolve, 600));
+                await downloadPDF(customer);
+            }
+        }
+    </script>
+</body>
+
+</html>
